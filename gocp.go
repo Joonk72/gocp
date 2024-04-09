@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"math"
@@ -9,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"flag"
 
 	"github.com/cheggaaa/pb/v3"
 	"github.com/dustin/go-humanize"
@@ -17,7 +17,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	_ "net/http/pprof" // Import the pprof package
+	_ "net/http/pprof"
 )
 
 type Args struct {
@@ -59,19 +59,21 @@ func main() {
 
 	// Use the provided arguments
 	args := Args{
-		Source: *source,
-		Target: *target,
+		Source:  *source,
+		Target:  *target,
 		Threads: *threads,
-	}	
+	}
 
 	sourcePath := args.Source
 	targetPath := args.Target
 
+	// check if the source folder existed.
 	if _, err := os.Stat(sourcePath); os.IsNotExist(err) {
 		fmt.Println("Source must be a directory.")
 		return
 	}
 
+	// create the target folder if it doesn't exist.
 	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
 		os.MkdirAll(targetPath, os.ModePerm)
 	}
@@ -82,7 +84,10 @@ func main() {
 	// get file and folder lists and total file count and folder count
 	totalFileCount, totalSize, folders, files := getFilesAndDir(sourcePath)
 	folderCount := len(folders)
-	fmt.Printf("Size %s of total files / folders: %d / %d\n", humanize.Bytes(totalSize), totalFileCount, folderCount)
+
+	var elapsed time.Duration = time.Since(start)
+	fmt.Printf("Size %s of total files / folders: %d / %d.\tElapsed time: %v\n",
+		humanize.IBytes(totalSize), totalFileCount, folderCount, elapsed)
 
 	// split it into chunks by the thread number
 	folderChunkSize := uint64(folderCount) / uint64(args.Threads)
@@ -105,38 +110,29 @@ func main() {
 			time.Sleep(1 * time.Second)
 			createFolders(sourcePath, targetPath, folders)
 		}
-
 	}
 
-	fmt.Println("Created all folders in destination.")
+	elapsed = time.Since(start)
+	fmt.Printf("Created all folders in destination.\tElapsed time: %v\n", elapsed)
 
+	// create a progress bar
 	barMain := pb.StartNew(int(totalFileCount))
 	barMain.SetTemplateString(`{{string . "prefix"}} {{counters . }} {{bar . "[" "=" ">" "-" "]" | green}} {{percent . }} {{etime . }} {{string . "suffix"}}`)
 	barMain.Start()
 
 	fileChunkSize := totalFileCount / uint64(args.Threads)
 	fileChunks := chunkArray(files, int(math.Round((float64(fileChunkSize)))))
-	
-	// Create a thread poolCopy with 4 workers
+
+	// Create a thread pool for copying threads
 	poolCopy := NewThreadPool(int(len(fileChunks)))
-	// defer poolCopy.Stop()
 
 	for _, files := range fileChunks {
 		files := files
 		err := poolCopy.Submit(func() {
-			for _, file := range files {
-				extractedFilename := strings.Replace(file, sourcePath, "", 1)
-				destFile := filepath.Join(targetPath, extractedFilename)
-				err := copyFileWithPool(file, destFile)
-				if err != nil {
-					fmt.Printf("Error copying file %s: %v\n", file, err)
-				}
-				barMain.Increment()
-			}
+			copyFiles(sourcePath, targetPath, files, barMain)
 		})
 
 		if err != nil {
-			// fmt.Println("Error submitting copy task:", err)
 			time.Sleep(1 * time.Second)
 			copyFiles(sourcePath, targetPath, files, barMain)
 		}
@@ -145,8 +141,8 @@ func main() {
 	poolCopy.Stop()
 	barMain.Finish()
 
-	elapsed := time.Since(start)
-	fmt.Printf("\nElapsed time: %v\n", elapsed)
+	elapsed = time.Since(start)
+	fmt.Printf("\nTotal Elapsed time: %v\n\n", elapsed)
 }
 
 // NewThreadPool creates a new thread pool with a specified number of workers.
@@ -177,6 +173,7 @@ func (pool *ThreadPool) Submit(task func()) error {
 }
 
 var ErrTaskQueueFull = errors.New("task queue is full")
+
 // Stop stops the thread pool, waiting for all tasks to complete.
 func (pool *ThreadPool) Stop() {
 	close(pool.tasks)
@@ -191,7 +188,8 @@ func copyFiles(sourcePath, targetPath string, files []string, barMain *pb.Progre
 	for _, file := range files {
 		extractedFilename := strings.Replace(file, sourcePath, "", 1)
 		destFile := filepath.Join(targetPath, extractedFilename)
-		err := copyFileWithPool(file, destFile)
+		// err := copyFileWithPool(file, destFile)
+		err := copyFile(file, destFile)
 		if err != nil {
 			fmt.Printf("Error copying file %s: %v\n", file, err)
 		}
@@ -200,11 +198,11 @@ func copyFiles(sourcePath, targetPath string, files []string, barMain *pb.Progre
 }
 
 func copyFileWithPool(src, dst string) error {
-	// 풀에서 파일 핸들을 가져옵니다.
+	// Get a file handle from the file pool
 	srcFile := filePool.Get().(*os.File)
 	defer filePool.Put(srcFile)
 
-	// 소스 파일을 엽니다.
+	// open the source file
 	var err error
 	srcFile, err = os.Open(src)
 	if err != nil {
@@ -212,14 +210,14 @@ func copyFileWithPool(src, dst string) error {
 	}
 	defer srcFile.Close()
 
-	// 대상 파일을 생성합니다.
+	// create the target file
 	dstFile, err := os.Create(dst)
 	if err != nil {
 		return fmt.Errorf("Failed to create target file: %w", err)
 	}
 	defer dstFile.Close()
 
-	// 버퍼를 사용하여 파일을 복사합니다.
+	// copy file with buffer
 	_, err = io.CopyBuffer(dstFile, srcFile, make([]byte, 32*1024))
 	// buf := make([]byte, 32*1024)
 	// var totalBytes int64
@@ -247,7 +245,30 @@ func copyFileWithPool(src, dst string) error {
 	return nil
 }
 
-// func countFilesInDir(path string) (uint64, uint64) {
+func copyFile(src, dst string) error {
+	// open the source file
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("Cannot open source file: %w", err)
+	}
+	defer srcFile.Close()
+
+	// create the target file
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("Failed to create target file: %w", err)
+	}
+	defer dstFile.Close()
+
+	// copy file
+	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		return fmt.Errorf("Failed to copy file: %w", err)
+	}
+
+	return nil
+}
+
 func getFilesAndDir(path string) (uint64, uint64, []string, []string) {
 	var filesCount, totalSize uint64
 	var directories []string
