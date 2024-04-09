@@ -1,19 +1,6 @@
 # Go Multi-Threaded Folder Copier
 
-This is a Go console program that copies a folder using multi-threads and displays copying progress, including copied files, copied bytes, estimated time, and elapsed time.
-
-## Usage
-
-go run main.go -s [source_folder] -t [target_folder] -mt [thread_number]
-
-## Example
-
-go run main.go -s ./src -t ./copied_folder -mt 5
-
-
-# Recursive File Copy Program
-
-This program copies the files and folder structure from a source directory to a target directory using multiple threads for parallel processing.
+This is a Go console program that copies a folder using multi-threads and displays copying progress, including copied files, estimated time, and elapsed time.
 
 ## Usage
 1. Clone the repository.
