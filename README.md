@@ -37,10 +37,4 @@ go run main.go -s ./src -t ./copied_folder -mt 5
 1. Compile the program using `go build main.go`.
 2. Run the program with the source directory, target directory, and number of threads as arguments.
 
-## Author
-JK NOH
-
-## License
-GPL
-
 Feel free to contribute or report issues!
